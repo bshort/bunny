@@ -37,7 +37,7 @@ from config import *
 class Bunny:
 	"""
 	
-	High level send and recive for wrapping all the lower function of bunny in paranoid mode.
+	High level send and receive for wrapping all the lower-level functions of bunny in paranoid mode.
 	
 	"""
 	
@@ -52,21 +52,22 @@ class Bunny:
 		self.cryptor = AEScrypt()
 		self.model = TrafficModel()
 		
-		# each item in should be an full bunny message that can be passed to the .decrypt() method
+		# each item should be an full bunny message that can be passed to the .decrypt() method
 		# TODO: put a upper bound of number of messages or a cleanup thread to clear out old messages
-		# 		if not consumed.
+		#  if not consumed.
 		self.msg_queue = Queue.LifoQueue()
 		
-		# The out queue is a FiFo Queue because it maintaines the ording of the bunny data
+		# The out queue is a FiFo Queue because it maintaines the ordering of the bunny data
 		#  format: [data, Bool (relay or not)]
 		self.out_queue = Queue.Queue()
 		
 		# The Deque is used because it is a thread safe iterable that can be filled with 'seen'
-		# messages to between the send and recv threads. 
+		# messages between the send and recv threads. 
 		self.msg_deque = []
 		
 		# init the threads and name them
-		self.workers = [BunnyReadThread(self.msg_queue, self.out_queue, self.inandout, self.model), BroadCaster(self.out_queue, self.inandout, self.model)]
+		self.workers = [BunnyReadThread(self.msg_queue, self.out_queue, self.inandout, self.model, self.cryptor), \
+			BroadCaster(self.out_queue, self.inandout, self.model)]
 		self.workers[0].name = "BunnyReadThread"
 		self.workers[1].name = "BroadCasterThread"
 		
@@ -75,8 +76,7 @@ class Bunny:
 			worker.daemon = True
 			worker.start()
 		
-		#TODO:?
-		# can I add a 'isAlive()' checking loop here?
+		#TODO: can I add a 'isAlive()' checking loop here?
 		
 	def sendBunny(self, packet):
 		"""
@@ -85,6 +85,11 @@ class Bunny:
 		
 		"""
 		packet = self.cryptor.encrypt(packet)
+		# Prepend the length of the packet as the first two bytes.
+		#  This allows for Bunny to know when to stop reading in packets.
+		size = struct.pack("H", len(packet))
+		packet = "%s%s" % (size, packet)
+		
 		self.msg_deque.append([packet, time.time()])
 		self.out_queue.put([packet, False])
 		
@@ -119,7 +124,7 @@ class Bunny:
 					if DEBUG:
 						print "Already seen message, not sending to user"
 					relay = True
-				# removed old known messages
+				# remove old known messages
 				if cur_time - message[1] > 60:
 					self.msg_deque.remove(message)
 					
@@ -128,7 +133,14 @@ class Bunny:
 			else:
 				self.out_queue.put([data, True])
 				self.msg_deque.append([data, time.time()])
-				return self.cryptor.decrypt(data)
+				
+				# remove the size data:
+				data = data[2:]
+				plaintext = self.cryptor.decrypt(data)
+				if plaintext == False:
+					continue
+				else:
+					return plaintext
 				
 	def killBunny(self):
 		for worker in self.workers:
@@ -136,11 +148,12 @@ class Bunny:
 
 class BunnyReadThread(threading.Thread):
 
-	def __init__(self, queue, out_queue, ioObj, model):
+	def __init__(self, queue, out_queue, ioObj, model, cryptor):
 		self.msg_queue = queue
 		self.out_queue = out_queue
 		self.inandout = ioObj
 		self.model = model
+		self.cryptor = cryptor
 		
 		self.running = True
 		threading.Thread.__init__(self)
@@ -167,7 +180,7 @@ class BunnyReadThread(threading.Thread):
 			
 			for entry in self.model.type_ranges:
 				if entry[0] == encoded[0:1]:
-					if entry[3] > 0:
+					if entry[2].injectable > 0:
 						# check so that the injectable length is over 0
 						type = entry
 						break
@@ -189,42 +202,41 @@ class BunnyReadThread(threading.Thread):
 			
 			# decode the bunny packet
 			temp = type[2].decode(encoded)
-			if DEBUG:
-				print "CypherText: " + binascii.hexlify(temp)
-			
+
 			if temp is False:
 				if DEBUG:
 					print "decoding fail"
 				continue
 			else:
-				decoded_len = len(decoded)
-				if decoded_len < 18:
-					decoded = decoded + temp
-				else:
-					if blockget == False:
-						blocks, = struct.unpack("H", decoded[16:18])
-						
-						if DEBUG:
-							print "blocks: " + str(blocks)
-						blockget = True
-						decoded = decoded + temp
-						decoded_len = len(decoded)
-					elif decoded_len < (32*blocks + 18):
-						decoded = decoded + temp
-						decoded_len = len(decoded)
-					if decoded_len >= (32*blocks + 18):
-						if DEBUG:
-							print "Adding message to Queues"
-						self.msg_queue.put(decoded)
-						
-						#TIMING
-						#print "recv time: %f" % (time.time() - start_t)
-						
-						# clean up for the next loop
-						blockget = False
-						decoded = ""
+				if DEBUG:
+					print "CypherText: " + binascii.hexlify(temp)
+				
+				if blockget == False:
+					pack_len, = struct.unpack("H", temp[0:2])
+
+					if DEBUG:
+						print "size: " + str(pack_len)
+					
+					blockget = True
+					decoded = "%s%s" % (decoded, temp)
+					decoded_len = len(decoded)
+				elif decoded_len < pack_len:
+					decoded = "%s%s" % (decoded, temp)
+					decoded_len = len(decoded)
+				if decoded_len >= pack_len:
+					if DEBUG:
+						print "Adding message to Queues"
+					self.msg_queue.put(decoded)
+					
+					#TIMING
+					#print "recv time: %f" % (time.time() - start_t)
+					
+					# clean up for the next loop
+					blockget = False
+					decoded = ""
 	def kill(self):
 		self.running = False
+		self.inandout.close()
 						
 class BroadCaster(threading.Thread):
 	
@@ -255,24 +267,21 @@ class BroadCaster(threading.Thread):
 			
 			if DEBUG:
 				print "CypherText: " + binascii.hexlify(packet)
-				print "blocks: " + binascii.hexlify(packet[16:18])
+				blocks, = struct.unpack("H", packet[0:2])
+				print "size: " + str(blocks)
 			
 			
 			while ( len(packet) != 0 ):
-				entry = self.model.getEntryFrom(self.model.type_ranges)
-				try:
-					outpacket = entry[2].makePacket(packet[:entry[3]])
-					if DEBUG:
-						print "Sending with: %s" % self.model.rawToType(entry[0])
-						print "length: " + str(len(outpacket))
-					
-				except AttributeError:
-					#TODO:?
-					# WTF does this do?
-					continue
-				packet = packet[entry[3]:]
+				entry = self.model.getEntry()
+				outpacket = entry[2].makePacket(packet[:entry[2].injectable])
+				if DEBUG:
+					print "Sending with: %s" % self.model.rawToType(entry[0])
+					print "length: " + str(len(outpacket))
+
+				packet = packet[entry[2].injectable:]
 				self.inandout.sendPacket(outpacket)
 			#TIMING
 			#print "Send time: " + str(time.time() - start_t)
 	def kill(self):
 		self.running = False
+		self.inandout.close()

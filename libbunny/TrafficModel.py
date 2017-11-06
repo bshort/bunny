@@ -260,19 +260,23 @@ class TrafficModel():
 		[type, freq, templateObject, injectLen]
 		
 		"""
+		tmp_list = []
 		for entry in self.type_ranges:
+			if entry[0] is None:
+				continue
 			type = self.rawToType(entry[0])
 			if (type == "beacon"):
 				# replace raw data with object of template type, then append the injection length
 				entry[2] = Templates.Beacon(entry[2])
-				entry[3] = entry[2].injectable
 			elif (type == "data" or type == "dataQOS" or type == "dataQOS2"):
 				entry[2] = Templates.DataQOS(entry[2])
-				entry[3] = entry[2].injectable
 			elif (type == "probeReq"):
 				entry[2] = Templates.ProbeRequest(entry[2])
-				entry[3] = entry[2].injectable
-			# add more
+			else:
+				continue
+			tmp_list.append(entry)
+		self.type_ranges = tmp_list
+
 	def insertNewTemplate(self, raw_packet):
 		"""
 		
@@ -283,11 +287,10 @@ class TrafficModel():
 		returns false if the packet type does not have a template
 		returns the entry in type_ranges[] if found
 		
-		TODO:
-		Currently only lets this bunny instance READ with this packet type because there is 
-		zero frequency.
+		TODO: Currently only lets this bunny instance READ 
+		with this packet type because there is zero frequency.
 		"""
-		entry = [0, 0, 0, 0]
+		entry = [0, 0, 0]
 		
 		raw_type = raw_packet[:1]
 		type = self.rawToType(raw_type)
@@ -296,15 +299,12 @@ class TrafficModel():
 			# replace raw data with object of template type, then append the injection length
 			entry[0] = raw_type
 			entry[2] = Templates.Beacon(raw_packet)
-			entry[3] = entry[2].injectable
 		elif (type == "data" or type == "dataQOS" or type == "dataQOS2"):
 			entry[0] = raw_type
 			entry[2] = Templates.DataQOS(raw_packet)
-			entry[3] = entry[2].injectable
 		elif (type == "probeReq"):
 			entry[0] = raw_type
 			entry[2] = Templates.ProbeRequest(raw_packet)
-			entry[3] = entry[2].injectable
 		else:
 			entry = False
 		
@@ -344,16 +344,16 @@ class TrafficModel():
 		for entry in self.mac_addresses:
 			print "%-15s%-10f%s" % (binascii.hexlify(entry[0]), entry[1], entry[2])
 
-	def getEntryFrom(self, array):
+	def getEntry(self):
 		"""
 		
-		Returns a frequency adjusted random entry from an array such as type_ranges
+		Returns a frequency adjusted random entry from the array type_ranges
 		Follows the [name, freq, ...] structure.
 		
 		"""
 		num = random.random()
 		count = 0.0
-		for entry in array:
+		for entry in self.type_ranges:
 			count += entry[1] 
 			if count > num:
 				break

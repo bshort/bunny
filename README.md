@@ -21,6 +21,15 @@ compatible cards.
 	rt2800usb	-	5370 Chipset (sold with raspberry pi's)
 					Note: Bunny works well on raspberry pi's
 
+##Configuration
+Configuring bunny is as simple as editing the "libbunny/config.py" file
+
+The most important item to modify is the IFACE varible, this sets which wireless interface you will use for Bunny. 
+ 
+Also if you wish to run a non-testing network, delete the 'keys.kz' file and bunny will make a new one with random values.  
+Distribute this file to the peers on your network.  Also Modulus and Remainder values should be changed as well, 
+for help generating mod/remain vaules check testScripts/mod.py
+
 ##Usage (bunnyChat.py example code)
 
 	sudo python bunnyChat.py
@@ -42,17 +51,18 @@ compatible cards.
 
 	while True:
 		print bunny.recvBunny()
+	bunny.killBunny()
 
-Configuring bunny is as simple as editing the libbunny/config.py
-
-The most important item to modify is the IFACE varible, this sets which wireless interface you will use for Bunny
-
+The modules aspect of Bunny is under-developed currently, the key file needs to be more controlable through the API 
+and BunnyExceptions need to be built out and used
 
 ##Dependencies
 
 	pycrypto
-	lorcon
-	pylorcon
+	keyczar
+		pyasn1
+	lorcon2 (current)
+	pylorcon2 (https://code.google.com/p/pylorcon2/)
 	pcapy
 
 ##Installation
@@ -60,9 +70,18 @@ Check INSTALL file
 
 ##TODO
 
-Implement pylorcon2 and lorcon2 once more drivers are added in lorcon2
-
 Routing layers and support for projects to be built ontop of what I have done
 like cjdns and others
 
 Attempt to make a bunny tun device so testing with the batman-adv kernal module.
+
+Create a packaged version with dependencies to reduce the install time. 
+
+##Bugs
+Due to this (https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=500041) bug in pcapy, at least on Arch linux I had to NOT use the offical upstream but the packaged AUR here: https://aur.archlinux.org/packages/python2-pcapy/
+
+Sometimes on ubuntu there is a rfkill block when trying to bring up an interface and you might see:
+    SIOCSIFFLAGS: Operation not possible due to RF-kill
+    
+you can solve this temporarly by:
+    sudo rfkill unblock wifi

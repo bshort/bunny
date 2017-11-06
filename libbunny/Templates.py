@@ -24,6 +24,9 @@ import struct, random, os
 
 from config import *
 
+def generate_seqnumb():
+	return struct.pack("<H", random.randrange(0,65536) & 0xF000)
+
 class Templates:
 	"""
 	
@@ -116,6 +119,9 @@ class Templates:
 				https://github.com/qca/open-ath9k-htc-firmware/issues/16
 			
 			"""
+
+			self.sequence_num = generate_seqnumb()
+
 			# timestamp needs more testing.
 			outbound = self.type + self.frame_control + self.duration + self.BSSID + self.SA + self.DA + self.sequence_num + self.timestamp + self.beacon_interval + inject_data[0:2]
 			
@@ -149,7 +155,7 @@ class Templates:
 				tag[1] = len(tag[2])
 			
 			# + 4 if for eating the checksum that for w/e reason gets parsed as a tag.	
-			outpack = outpack + tag[0] + struct.pack("B", tag[1]+4) + tag[2]
+			outpack = outpack + tag[0] + struct.pack("B", tag[1]) + tag[2]
 			
 			return outpack
 		
@@ -161,9 +167,14 @@ class Templates:
 			# capabilities.
 			output = input[34:36]
 			
-			input = input[36:]
-			
 			temp_tags = []
+			input = input[36:]
+			data_size = len(input)
+			
+			# protect from non-Bunny packets
+			if data_size < 4:
+				return False
+				
 			# loop through and grab the second to last vendor tag
 			while (len(input) >= 4):
 				id = input[:1]
@@ -229,8 +240,7 @@ class Templates:
 			self.QOS = packet[24:26]
 			self.databody = packet[26:]
 			
-			# TODO:
-			#  dynamic lengths of injectable data. randomly?
+			# TODO: dynamic lengths of injectable data. randomly?
 			# Temp size is 40 bytes
 			self.injectable = 40
 			
@@ -240,6 +250,8 @@ class Templates:
 			Make a QOS data packet with injected data, fields are: Sequence num and databody
 			
 			"""
+			self.sequence_num = generate_seqnumb()
+
 			outbound = self.type + self.frame_control + self.duration+ self.BSSID + self.SA + self.DA + self.sequence_num + self.QOS
 			
 			outbound = outbound + struct.pack("B", len(inject_data)) + inject_data
@@ -254,6 +266,11 @@ class Templates:
 			return outpack
 			
 		def decode(self, input):
+			
+			# If the packet is not 27 bytes long it does not have any data in it. return false
+			if len(input) < 27:
+				return False
+			
 			# read the databody up to the size of the byte of length
 			size, = struct.unpack("B", input[26:27])
 			output = input[27:size+27]
@@ -311,8 +328,12 @@ class Templates:
 			"""
 			
 			Creates a packet with injected encrypted data.
+
+			Inject data into the SSID field, this should be considered for modification to a vendor field
 			
 			"""
+
+			self.sequence_num = generate_seqnumb()
 			
 			outbound = self.type + self.frame_control + self.duration + self.DA + self.SA + self.BSSID + self.sequence_num
 			outbound = outbound + "\x00" + struct.pack("<B", len(inject_data)) + inject_data 
@@ -349,15 +370,28 @@ class Templates:
 			temp_tags = []
 			
 			input = input[24:]
+			data_size = len(input)
+			
+			# This should protect from non-Bunny probe requests being decoded
+			if data_size < 4:
+				return False
 			while (len(input) >= 4):
 				id = input[:1]
 				length, = struct.unpack("B", input[1:2])
 				value = input[2:length+2]
 				temp_tags.append([id, length, value])
 				input = input[length + 2:]
-			# TODO: error here, index out of range.
-			return temp_tags[0][2]
-			
+				
+			# Check the SSID tag for sanity,
+			for tag, length, value in temp_tags:
+				if tag == "\x00":
+					if length == 0:
+						return False
+					else:
+						return value
+					break
+			return False
+
 		def tagGrabber(self, id):
 			"""
 			
